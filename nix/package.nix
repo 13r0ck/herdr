@@ -1,6 +1,7 @@
 {
   lib,
   stdenv,
+  darwin,
   rustPlatform,
   runCommand,
   zig_0_16,
@@ -99,7 +100,8 @@ rustPlatform.buildRustPackage {
     zig_0_16
     makeWrapper
   ]
-  ++ lib.optionals stdenv.hostPlatform.isLinux [ copyDesktopItems ];
+  ++ lib.optionals stdenv.hostPlatform.isLinux [ copyDesktopItems ]
+  ++ lib.optionals stdenv.hostPlatform.isDarwin [ darwin.cctools ];
 
   buildInputs = lib.optionals stdenv.hostPlatform.isLinux runtimeDependencies;
   LIBCLANG_PATH = "${lib.getLib libclang}/lib";
