@@ -2,6 +2,7 @@
   lib,
   stdenv,
   rustPlatform,
+  runCommand,
   zig_0_16,
   pkg-config,
   clang,
@@ -20,6 +21,7 @@
   ghostty,
 }:
 let
+  version = (lib.importTOML ../Cargo.toml).package.version;
   runtimeDependencies = [
     fontconfig
     freetype
@@ -28,17 +30,39 @@ let
     wayland
     vulkan-loader
   ];
-  zigDeps = zig_0_16.fetchDeps {
-    pname = "herdr-ghostty";
-    version = ghostty.shortRev;
-    src = ghostty;
-    fetchAll = true;
-    hash = "sha256-G9xbZ/pyQTDIfzG0h++i70a45zpwyYpZMBZfAnoOQw0=";
-  };
+  zigDeps =
+    if stdenv.hostPlatform.isDarwin then
+      runCommand "herdr-ghostty-zig-deps"
+        {
+          nativeBuildInputs = [ zig_0_16 ];
+          outputHashMode = "recursive";
+          outputHash = "sha256-fELTGrVyRIAbXGClAz8+czPbgAfZYR3yP9Hsk/6UiIQ=";
+        }
+        ''
+          export ZIG_GLOBAL_CACHE_DIR="$TMPDIR/zig-cache"
+          mkdir -p "$ZIG_GLOBAL_CACHE_DIR/tmp"
+          cp -R ${ghostty} ghostty
+          chmod -R u+w ghostty
+          cd ghostty
+          # Preserve the pinned commit and package hash while avoiding Codeberg outages.
+          substituteInPlace pkg/translate-c/build.zig.zon \
+            --replace-fail 'https://codeberg.org/vancluever/translate-c/archive/' \
+                           'https://github.com/moderatelyConfused/translate-c/archive/'
+          zig build --fetch -Demit-lib-vt -Demit-xcframework=false -Doptimize=ReleaseFast
+          mv "$ZIG_GLOBAL_CACHE_DIR/p" "$out"
+        ''
+    else
+      zig_0_16.fetchDeps {
+        pname = "herdr-ghostty";
+        version = ghostty.shortRev;
+        src = ghostty;
+        fetchAll = true;
+        hash = "sha256-G9xbZ/pyQTDIfzG0h++i70a45zpwyYpZMBZfAnoOQw0=";
+      };
 in
 rustPlatform.buildRustPackage {
   pname = "herdr-app";
-  version = (lib.importTOML ../Cargo.toml).package.version;
+  inherit version;
   src = lib.fileset.toSource {
     root = ../.;
     fileset = lib.fileset.unions [
@@ -47,6 +71,8 @@ rustPlatform.buildRustPackage {
       ../build.rs
       ../CHANGELOG.md
       ../LICENSE
+      ../THIRD-PARTY-NOTICES
+      ../scripts/fixtures
       ../assets
       ../crates
       ../defaults
@@ -129,12 +155,26 @@ rustPlatform.buildRustPackage {
     })
   ];
 
-  postInstall = lib.optionalString stdenv.hostPlatform.isLinux ''
-    install -Dm644 assets/icons/herdr-ui-icon-clean.svg \
-      "$out/share/icons/hicolor/scalable/apps/herdr-app.svg"
-    wrapProgram "$out/bin/herdr-app" \
-      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeDependencies} \
-      --suffix PATH : ${lib.makeBinPath [ xdg-utils ]}
+  postInstall =
+    lib.optionalString stdenv.hostPlatform.isLinux ''
+      install -Dm644 assets/icons/herdr-ui-icon-clean.svg \
+        "$out/share/icons/hicolor/scalable/apps/herdr-app.svg"
+      wrapProgram "$out/bin/herdr-app" \
+        --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeDependencies} \
+        --suffix PATH : ${lib.makeBinPath [ xdg-utils ]}
+    ''
+    + lib.optionalString stdenv.hostPlatform.isDarwin ''
+      app="$out/Applications/Herdr.app"
+      mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+      mv "$out/bin/herdr-app" "$app/Contents/MacOS/Herdr"
+      cp ${./Info.plist} "$app/Contents/Info.plist"
+      substituteInPlace "$app/Contents/Info.plist" --replace-fail '@version@' '${version}'
+      cp assets/icons/Herdr.icns LICENSE THIRD-PARTY-NOTICES "$app/Contents/Resources/"
+      ln -s "$app/Contents/MacOS/Herdr" "$out/bin/herdr-app"
+    '';
+
+  postFixup = lib.optionalString stdenv.hostPlatform.isDarwin ''
+    /usr/bin/codesign --force --sign - "$out/Applications/Herdr.app"
   '';
 
   doInstallCheck = true;
@@ -142,6 +182,11 @@ rustPlatform.buildRustPackage {
     runHook preInstallCheck
     "$out/bin/herdr-app" --help > /dev/null
     "$out/bin/herdr-app" --skill > /dev/null
+    ${lib.optionalString stdenv.hostPlatform.isDarwin ''
+      test -x "$out/Applications/Herdr.app/Contents/MacOS/Herdr"
+      /usr/bin/plutil -lint "$out/Applications/Herdr.app/Contents/Info.plist"
+      /usr/bin/codesign --verify --deep --strict "$out/Applications/Herdr.app"
+    ''}
     runHook postInstallCheck
   '';
 
