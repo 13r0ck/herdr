@@ -79,6 +79,7 @@ rustPlatform.buildRustPackage {
       ../defaults
       ../distribution/core-version
       ../src
+      ../shell
       ../tests
       ../vendor
     ];
@@ -157,23 +158,25 @@ rustPlatform.buildRustPackage {
     })
   ];
 
-  postInstall =
-    lib.optionalString stdenv.hostPlatform.isLinux ''
-      install -Dm644 assets/icons/herdr-ui-icon-clean.svg \
-        "$out/share/icons/hicolor/scalable/apps/herdr-app.svg"
-      wrapProgram "$out/bin/herdr-app" \
-        --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeDependencies} \
-        --suffix PATH : ${lib.makeBinPath [ xdg-utils ]}
-    ''
-    + lib.optionalString stdenv.hostPlatform.isDarwin ''
-      app="$out/Applications/Herdr.app"
-      mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-      mv "$out/bin/herdr-app" "$app/Contents/MacOS/Herdr"
-      cp ${./Info.plist} "$app/Contents/Info.plist"
-      substituteInPlace "$app/Contents/Info.plist" --replace-fail '@version@' '${version}'
-      cp assets/icons/Herdr.icns LICENSE THIRD-PARTY-NOTICES "$app/Contents/Resources/"
-      ln -s "$app/Contents/MacOS/Herdr" "$out/bin/herdr-app"
-    '';
+  postInstall = ''
+    install -Dm644 shell/herdr.zsh "$out/share/herdr-app/shell/herdr.zsh"
+  ''
+  + lib.optionalString stdenv.hostPlatform.isLinux ''
+    install -Dm644 assets/icons/herdr-ui-icon-clean.svg \
+      "$out/share/icons/hicolor/scalable/apps/herdr-app.svg"
+    wrapProgram "$out/bin/herdr-app" \
+      --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath runtimeDependencies} \
+      --suffix PATH : ${lib.makeBinPath [ xdg-utils ]}
+  ''
+  + lib.optionalString stdenv.hostPlatform.isDarwin ''
+    app="$out/Applications/Herdr.app"
+    mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+    mv "$out/bin/herdr-app" "$app/Contents/MacOS/Herdr"
+    cp ${./Info.plist} "$app/Contents/Info.plist"
+    substituteInPlace "$app/Contents/Info.plist" --replace-fail '@version@' '${version}'
+    cp assets/icons/Herdr.icns LICENSE THIRD-PARTY-NOTICES "$app/Contents/Resources/"
+    ln -s "$app/Contents/MacOS/Herdr" "$out/bin/herdr-app"
+  '';
 
   postFixup = lib.optionalString stdenv.hostPlatform.isDarwin ''
     /usr/bin/codesign --force --sign - "$out/Applications/Herdr.app"

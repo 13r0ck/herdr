@@ -140,7 +140,72 @@ impl Default for SearchProgress {
 }
 
 /// Holds what the terminal's callbacks write into; boxed so its address is stable.
+struct Boundary {
+    kind: GhosttySemanticPromptKind,
+    prompt: GhosttySemanticPromptPromptKind,
+    location: GhosttyTrackedGridRef,
+    after: bool,
+}
+
+impl Drop for Boundary {
+    fn drop(&mut self) {
+        unsafe { ghostty_tracked_grid_ref_free(self.location) };
+    }
+}
+
+unsafe extern "C" fn on_semantic(
+    term: GhosttyTerminal,
+    data: *mut c_void,
+    event: *const GhosttyTerminalSemanticPrompt,
+) {
+    unsafe {
+        let mut screen = GHOSTTY_TERMINAL_SCREEN_PRIMARY;
+        ghostty_terminal_get(
+            term,
+            GHOSTTY_TERMINAL_DATA_ACTIVE_SCREEN,
+            &mut screen as *mut _ as *mut c_void,
+        );
+        if screen != GHOSTTY_TERMINAL_SCREEN_PRIMARY {
+            return;
+        }
+        let shared = &mut *(data as *mut Shared);
+        let event = &*event;
+        shared
+            .boundaries
+            .retain(|b| ghostty_tracked_grid_ref_has_value(b.location));
+        let mut after = false;
+        ghostty_terminal_get(term, GHOSTTY_TERMINAL_DATA_CURSOR_PENDING_WRAP, &mut after as *mut _ as *mut c_void);
+        let mut x: u16 = 0;
+        let mut y: u16 = 0;
+        ghostty_terminal_get(
+            term,
+            GHOSTTY_TERMINAL_DATA_CURSOR_X,
+            &mut x as *mut _ as *mut c_void,
+        );
+        ghostty_terminal_get(
+            term,
+            GHOSTTY_TERMINAL_DATA_CURSOR_Y,
+            &mut y as *mut _ as *mut c_void,
+        );
+        let mut point = GhosttyPoint {
+            tag: GHOSTTY_POINT_TAG_ACTIVE,
+            ..Default::default()
+        };
+        point.value.coordinate = GhosttyPointCoordinate { x, y: y.into() };
+        let mut location = std::ptr::null_mut();
+        if ghostty_terminal_grid_ref_track(term, point, &mut location) == GHOSTTY_SUCCESS {
+            shared.boundaries.push(Boundary {
+                kind: event.kind,
+                prompt: event.prompt_kind,
+                location,
+                after,
+            });
+        }
+    }
+}
+
 struct Shared {
+    boundaries: Vec<Boundary>,
     state: GhosttyRenderState,
     size: GhosttySizeReportSize,
     held_since: Option<Instant>,
@@ -675,7 +740,7 @@ impl Vt {
             ok(ghostty_mouse_event_new(std::ptr::null(), &mut mouse_event), "mouse_event_new");
 
             install_png_decoder();
-            let mut shared = Box::new(Shared { state, size: GhosttySizeReportSize { rows: rows.max(1), columns: cols.max(1), cell_width: 0, cell_height: 0 }, held_since: None, title_changed: false, replies: Vec::new(), clipboard_write: true, clipboard: [None, None] });
+            let mut shared = Box::new(Shared { boundaries: Vec::new(), state, size: GhosttySizeReportSize { rows: rows.max(1), columns: cols.max(1), cell_width: 0, cell_height: 0 }, held_since: None, title_changed: false, replies: Vec::new(), clipboard_write: true, clipboard: [None, None] });
             let ud = &mut *shared as *mut Shared as *const c_void;
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_USERDATA, ud);
             let hold: GhosttyTerminalRenderHoldFn = Some(on_render_hold);
@@ -690,6 +755,8 @@ impl Vt {
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE, std::mem::transmute::<GhosttyTerminalClipboardWriteFn, *const c_void>(clipboard));
             let max_clipboard: usize = MAX_CLIPBOARD_BYTES;
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_CLIPBOARD_WRITE_MAX_BYTES, &max_clipboard as *const _ as *const c_void);
+            let semantic: GhosttyTerminalSemanticPromptFn = Some(on_semantic);
+            ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_SEMANTIC_PROMPT, std::mem::transmute::<GhosttyTerminalSemanticPromptFn, *const c_void>(semantic));
             // No read callback: programs can never read the local clipboard.
             let images: u64 = 128 << 20;
             ghostty_terminal_set(term, GHOSTTY_TERMINAL_OPT_KITTY_IMAGE_STORAGE_LIMIT, &images as *const _ as *const c_void);
@@ -1051,6 +1118,72 @@ impl Vt {
         (unsafe { ghostty_terminal_grid_ref(self.term, p, &mut r) } == GHOSTTY_SUCCESS).then_some(r)
     }
 
+    /// Owned, menu-local text. No selection or viewport mutations are needed.
+    pub fn menu_snapshot(&self, col: u16, row: u16) -> serde_json::Value {
+        use serde_json::json;
+        let selection = self.selection_text();
+        if self.alt_screen() { return json!({"selection": selection, "alternate": true}); }
+        let mut clicked = GhosttyPointCoordinate::default();
+        let Some(reference) = self.grid_ref(GHOSTTY_POINT_TAG_VIEWPORT, col, row.into()) else {
+            return json!({"selection": selection});
+        };
+        unsafe {
+            ghostty_terminal_point_from_grid_ref(
+                self.term,
+                &reference,
+                GHOSTTY_POINT_TAG_SCREEN,
+                &mut clicked,
+            );
+        }
+        let mut cursor_x = 0u16;
+        let mut cursor_y = 0u16;
+        let mut cursor = GhosttyPointCoordinate::default();
+        unsafe {
+            ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_CURSOR_X,
+                &mut cursor_x as *mut _ as *mut c_void,
+            );
+            ghostty_terminal_get(
+                self.term,
+                GHOSTTY_TERMINAL_DATA_CURSOR_Y,
+                &mut cursor_y as *mut _ as *mut c_void,
+            );
+            if let Some(r) = self.grid_ref(GHOSTTY_POINT_TAG_ACTIVE, cursor_x, cursor_y.into()) {
+                ghostty_terminal_point_from_grid_ref(
+                    self.term,
+                    &r,
+                    GHOSTTY_POINT_TAG_SCREEN,
+                    &mut cursor,
+                );
+            }
+        }
+        let boundaries: Vec<_> = self.shared.boundaries.iter().map(|b| {
+            let mut p = GhosttyPointCoordinate::default();
+            let valid = unsafe { ghostty_tracked_grid_ref_point(b.location, GHOSTTY_POINT_TAG_SCREEN, &mut p) } == GHOSTTY_SUCCESS;
+            json!({"kind": b.kind, "prompt": b.prompt, "at": valid.then_some(json!([p.y, p.x + u16::from(b.after)]))})
+        }).collect();
+        let mut rows = Vec::new();
+        for y in 0.. {
+            let Some(line) = self.link_row(y) else { break };
+            let cells: Vec<_> = line.spots.iter().enumerate().map(|(i, spot)| {
+                let reference = self.grid_ref(GHOSTTY_POINT_TAG_SCREEN, spot.x, y).unwrap();
+                let mut cell = GhosttyCell::default();
+                let mut semantic = 0u32;
+                let mut codepoint = 0u32;
+                unsafe {
+                    ghostty_grid_ref_cell(&reference, &mut cell);
+                    ghostty_cell_get(cell, GHOSTTY_CELL_DATA_SEMANTIC_CONTENT, &mut semantic as *mut _ as *mut c_void);
+                    ghostty_cell_get(cell, GHOSTTY_CELL_DATA_CODEPOINT, &mut codepoint as *mut _ as *mut c_void);
+                }
+                let end = line.spots.get(i + 1).map_or(line.text.len(), |s| s.byte);
+                json!({"x":spot.x, "width":spot.width, "text": &line.text[spot.byte..end], "semantic":semantic, "used":codepoint != 0})
+            }).collect();
+            rows.push(json!({"cells":cells, "wraps":line.wraps}));
+        }
+        json!({"selection":selection, "alternate":self.alt_screen(), "clicked":[clicked.y,clicked.x], "cursor":[cursor.y,cursor.x], "rows":rows, "boundaries":boundaries})
+    }
+
     /// The link at a viewport cell: a link the program marked (OSC 8), or a
     /// URL or path in the text. Follows lines the terminal wrapped, also into
     /// rows scrolled out of view. Then tries the lines around joined, their
@@ -1181,9 +1314,13 @@ impl Vt {
                 continue;
             }
             let byte = text.len();
-            let mut cps = [0u32; 16];
+            let mut cps = vec![0u32; 16];
             let mut len = 0usize;
             unsafe { ghostty_grid_ref_graphemes(&r, cps.as_mut_ptr(), cps.len(), &mut len) };
+            if len > cps.len() {
+                cps.resize(len, 0);
+                unsafe { ghostty_grid_ref_graphemes(&r, cps.as_mut_ptr(), cps.len(), &mut len) };
+            }
             text.extend(cps[..len.min(cps.len())].iter().filter_map(|c| char::from_u32(*c)));
             if text.len() == byte {
                 text.push(' ');
@@ -1824,6 +1961,7 @@ impl Drop for Vt {
             ghostty_key_encoder_free(self.keys);
             ghostty_render_state_row_cells_free(self.cells);
             ghostty_render_state_row_iterator_free(self.rows_it);
+            self.shared.boundaries.clear();
             ghostty_terminal_free(self.term);
             ghostty_render_state_free(self.shared.state);
         }
@@ -1842,6 +1980,49 @@ mod tests {
             vt.progress_search();
         }
         panic!("terminal search did not finish incrementally");
+    }
+
+    #[test]
+    fn menu_boundary_after_the_last_column_keeps_that_cell() {
+        let mut vt = Vt::new(4, 3);
+        vt.write(b"\x1b]133;A\x07$ \x1b]133;B\x07x\r\n\x1b]133;C\x07abcd\x1b]133;D;0\x07");
+        assert_eq!(vt.menu_snapshot(0, 1)["boundaries"][3]["at"], serde_json::json!([1, 4]));
+    }
+
+    #[test]
+    fn menu_snapshot_maps_scrollback_and_wide_cells_and_eviction() {
+        let mut vt = Vt::new(20, 3);
+        vt.write("\x1b]133;A\x07$ \x1b]133;B\x07echo 界\r\n\x1b]133;C\x07界\r\n\x1b]133;D;0\x07".as_bytes());
+        vt.write(b"next\r\nnext\r\n");
+        vt.scroll_to_row(0);
+        let captured = vt.menu_snapshot(1, 1);
+        assert_eq!(captured["clicked"], serde_json::json!([1, 1]));
+        assert_eq!(captured["rows"][1]["cells"][0]["text"], "界");
+        assert_eq!(captured["rows"][1]["cells"][1]["x"], 2);
+        unsafe {
+            let limit: usize = 2;
+            ghostty_terminal_set(vt.term, GHOSTTY_TERMINAL_OPT_SCROLLBACK_MAX_LINES, &limit as *const _ as *const c_void);
+        }
+        for _ in 0..10_000 { vt.write(b"evict\r\n"); }
+        let after = vt.menu_snapshot(0, 0);
+        assert!(after["boundaries"].as_array().unwrap().iter().all(|b| b["at"].is_null()), "boundaries={}, rows={}", after["boundaries"], after["rows"].as_array().unwrap().len());
+        assert_eq!(captured["rows"][1]["cells"][0]["text"], "界");
+    }
+
+    #[test]
+    fn menu_snapshot_tracks_boundaries_and_owns_text() {
+        let mut vt = Vt::new(20, 4);
+        vt.write(b"\x1b]133;A\x07$ \x1b]133;B\x07echo x\r\n\x1b]133;C\x07x\r\n\x1b]133;D;0\x07");
+        let captured = vt.menu_snapshot(0, 1);
+        assert_eq!(captured["boundaries"].as_array().unwrap().len(), 4);
+        assert_eq!(captured["boundaries"][2]["at"], serde_json::json!([1, 0]));
+        vt.resize(10, 4, 10, 20);
+        vt.write(b"more output\r\n");
+        assert_eq!(captured["rows"][1]["cells"][0]["text"], "x");
+        assert_eq!(
+            vt.menu_snapshot(0, 1)["boundaries"][2]["at"],
+            serde_json::json!([1, 0])
+        );
     }
 
     #[test]

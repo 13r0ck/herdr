@@ -1427,8 +1427,8 @@ impl AppWindow {
                 TerminalEvent::Peek(address) => this.peek_terminal(address, window, cx),
                 TerminalEvent::TitleChanged => this.publish(cx),
                 TerminalEvent::Ended => this.terminal_ended(&block, window, cx),
-                TerminalEvent::ContextMenu(at) => {
-                    this.open_menu("pane", json!({ "pane": block.trim_end_matches(SWAP), "terminal": addr }), Some(*at), window, cx)
+                TerminalEvent::ContextMenu(at, snapshot) => {
+                    this.open_menu("pane", json!({ "pane": block.trim_end_matches(SWAP), "terminal": addr, "snapshot": snapshot }), Some(*at), window, cx)
                 }
             });
             let focus = view.read(cx).focus_handle().clone();

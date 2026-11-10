@@ -374,7 +374,7 @@ fn describe_with_values(
     static NEXT_STORE: AtomicU64 = AtomicU64::new(0);
     let policy = Policy::new()
         .with_storage_path(staged.0.join(format!("store-{}.json", NEXT_STORE.fetch_add(1, Ordering::Relaxed))))
-        .with_capabilities(Capabilities::new().storage(true).read_roots([staged.0.clone()]))
+        .with_capabilities(Capabilities::new().storage(true).clipboard_write(true).read_roots([staged.0.clone()]))
         .with_host_module(module(values, calls.clone()))?;
     let runtime = ShellRuntime::new_isolated()?;
     let root = setup.map(|s| staged.wrapper(entry, s)).unwrap_or_else(|| staged.0.join(entry));
@@ -1026,4 +1026,24 @@ fn status_bar_shows_the_real_palette_key(cx: &mut TestAppContext) {
     let tree = describe_with_values(cx, &staged, "mods/workspace-status", unbound, None).unwrap();
     assert!(tree.contains("commands"), "unbound hint still offers commands: {tree}");
     assert!(!tree.contains("Shift P"), "unbound hint must not invent a key: {tree}");
+}
+
+#[gpui::test]
+fn terminal_menu_copies_captured_selection_command_and_output(cx: &mut TestAppContext) {
+    cx.update(gpui_shell::init);
+    let staged = Staged::new();
+    let mut p = props();
+    p["target"]["snapshot"] = json!({
+        "selection":"selected\ntext", "clicked":[1,0], "cursor":[2,0],
+        "boundaries":[{"kind":1,"prompt":0,"at":[0,0]},{"kind":3,"at":[1,0]},{"kind":4,"at":[2,0]}],
+        "rows":[
+            {"wraps":false,"cells":[{"x":0,"text":"$ ","used":true,"semantic":2},{"x":2,"text":"true","used":true,"semantic":1}]},
+            {"wraps":false,"cells":[{"x":0,"text":"  界","used":true,"semantic":0}]},
+            {"wraps":false,"cells":[]}
+        ]
+    });
+    for (i, expected) in ["selected\ntext", "  界\n", "true"].iter().enumerate() {
+        describe(cx, &staged, "mods/menu", true, p.clone(), updates("current", "current"), Some(&format!("this.choose({i}, cx);"))).unwrap();
+        assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(), Some(*expected));
+    }
 }

@@ -117,7 +117,7 @@ pub enum TerminalEvent {
     /// The program ended.
     Ended,
     /// Right-click where the program doesn't take the mouse: the pane menu.
-    ContextMenu(Point<Pixels>),
+    ContextMenu(Point<Pixels>, serde_json::Value),
 }
 
 /// What the canvas closures need, shared outside the entity so prepaint can resize.
@@ -2183,7 +2183,11 @@ impl Render for TerminalView {
                 if this.right_click_to_program && this.takes_mouse(ev.modifiers) {
                     this.mouse(GHOSTTY_MOUSE_ACTION_PRESS, Some(ev.button), ev.position, ev.modifiers);
                 } else {
-                    cx.emit(TerminalEvent::ContextMenu(ev.position));
+                    let g = this.grid.borrow();
+                    let (x, y) = local(&g, ev.position);
+                    let snapshot = g.vt.menu_snapshot((x / f32::from(g.cell.width)) as u16, (y / f32::from(g.cell.height)) as u16);
+                    drop(g);
+                    cx.emit(TerminalEvent::ContextMenu(ev.position, snapshot));
                 }
             }))
             .on_mouse_down(MouseButton::Middle, cx.listener(|this, ev: &MouseDownEvent, _, cx| {

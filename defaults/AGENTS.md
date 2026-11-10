@@ -1064,3 +1064,9 @@ including a small herdr-core skill you can install with the user's permission.
 - One mod per idea. Don't edit `AGENTS.md` or the `.d.ts` files (the app
   rewrites them). Don't touch other mods unless the request
   needs it.
+
+Terminal right-click menus offer Copy (the selection captured at opening),
+Copy Output and Copy Command. Command actions require OSC 133 shell markers;
+source the packaged `share/herdr-app/shell/herdr.zsh` in interactive Herdr zsh
+sessions, including explicitly configured remote shells. Existing unmarked
+scrollback and alternate-screen applications support selection copying only.

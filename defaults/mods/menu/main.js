@@ -3,6 +3,7 @@
 // ↑/↓ move, Enter runs, Esc closes. An item is [label, command, args];
 // a command "worktree" opens the worktree dialog instead.
 
+import { commandAt } from "./command.js";
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec } from "herdr";
@@ -35,7 +36,11 @@ function items(p, git) {
       // A terminal shown outside a tab (a layout terminal block, a window) has
       // no pane to split, zoom or close: its pane is the block's id.
       const inTab = panes().some((pane) => pane.pane === tg.pane);
+      const region = commandAt(tg.snapshot);
       return [
+        ["Copy", "clipboard", { text: tg.snapshot?.selection }, tg.snapshot?.selection == null],
+        ["Copy Output", "clipboard", { text: region?.output }, !region],
+        ["Copy Command", "clipboard", { text: region?.command }, !region],
         ...(inTab
           ? [
               ["Split right", "pane.split", { direction: "right", pane: tg.pane }],
@@ -94,7 +99,7 @@ function shortcut(name, args) {
 
 export default class Menu extends View {
   init(_props, cx) {
-    this.at = 0;
+    this.at = Math.max(0, items(props(), null).findIndex(it => !it[3]));
     this.git = null;
     this.handle = cx.focus_handle();
     this.handle.focus();
@@ -110,10 +115,11 @@ export default class Menu extends View {
 
   choose(i, cx) {
     const it = items(props(), this.git)[i];
-    if (!it) return;
+    if (!it || it[3]) return;
+    if (it[1] === "clipboard") cx.write_to_clipboard(it[2].text);
     closeOverlay(props()?.overlay);
     if (it[1] === "worktree") openOverlay({ mod: "worktree", kind: "dialog", ...(it[2].action === "open" ? { width: 560, height: 480 } : { width: 440, height: 260 }), props: it[2] });
-    else run(it[1], it[2]);
+    else if (it[1] !== "clipboard") run(it[1], it[2]);
   }
 
   render(cx) {
@@ -128,8 +134,13 @@ export default class Menu extends View {
       .bg(t.popover)
       .text_size(12.8)
       .on_key_down((e, cx) => {
-        if (e.key === "down") this.at = (this.at + 1) % list.length;
-        else if (e.key === "up") this.at = (this.at + list.length - 1) % list.length;
+        if (e.key === "down" || e.key === "up") {
+          const step = e.key === "down" ? 1 : list.length - 1;
+          for (let n = 0; n < list.length; n++) {
+            this.at = (this.at + step) % list.length;
+            if (!list[this.at][3]) break;
+          }
+        }
         else if (e.key === "enter") this.choose(this.at, cx);
         else if (e.key === "escape") closeOverlay(props().overlay);
         else return;
@@ -147,8 +158,8 @@ export default class Menu extends View {
             .rounded(7)
             .items_center()
             .justify_between()
-            .text_color(t.foreground)
-            .when(i === this.at, (el) => el.bg(t.selected))
+            .text_color(it[3] ? t.dim : t.foreground)
+            .when(!it[3] && i === this.at, (el) => el.bg(t.selected))
             .hover((s) => s.bg(t.hover))
             .on_click((_e, cx) => this.choose(i, cx))
             .child(svg(menuIcon(it[1])).size(14).flex_none().text_color(t.muted))

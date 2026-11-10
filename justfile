@@ -42,7 +42,7 @@ pre-release: test docs-check
 build:
     cargo build --locked
 
-test:
+test: command-copy-test
     bun test scripts/files.test.ts scripts/machine-add.test.ts scripts/picker.test.ts scripts/palette.test.ts scripts/agents.test.ts scripts/spaces.test.ts scripts/worktree.test.ts
     cargo test --locked
 
@@ -64,3 +64,8 @@ install:
 [windows]
 install:
     powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install-windows.ps1
+
+command-copy-test:
+    bun test scripts/command-copy.test.ts
+    zsh -fi scripts/shell-integration.test.zsh
+    python3 scripts/shell-integration-pty.py
