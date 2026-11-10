@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { commandAt } from '../defaults/mods/menu/command.js';
+import { commandAt, copyItem } from '../defaults/mods/menu/command.js';
 const row = (text, semantic=0, wraps=false) => ({wraps, cells:Array.from(text, (text,x)=>({text,x,semantic,used:true}))});
 const snapshot = () => ({ clicked:[1,0], rows:[row('$ echo x',1),row('x'),row('')], cursor:[2,0], boundaries:[{kind:1,prompt:0,at:[0,0]},{kind:3,at:[1,0]},{kind:4,at:[2,0]}] });
 test('selects from input or output; preserves output newline',()=>{
@@ -31,4 +31,18 @@ test('excludes continuation and right prompts using semantic cells',()=>{
 
 test('an explicitly discarded completion boundary is unavailable',()=>{
  const s=snapshot(); s.boundaries[2].at=null; expect(commandAt(s)).toBeNull();
+});
+
+test('Copy includes command and output without a selection',()=>{
+ const s=snapshot();s.rows[0].cells[0].semantic=2;s.rows[0].cells[1].semantic=2;
+ expect(copyItem(s)).toEqual(['Copy','clipboard',{text:'echo x\nx\n'},false]);
+ s.boundaries[2].at=[1,0];s.clicked=[0,3];
+ expect(copyItem(s)).toEqual(['Copy','clipboard',{text:'echo x\n'},false]);
+});
+test('Copy Selected takes precedence over the clicked command and works in alternate screens',()=>{
+ const s={...snapshot(),selection:'  chosen 界\n\n',alternate:true};
+ expect(copyItem(s)).toEqual(['Copy Selected','clipboard',{text:s.selection},false]);
+});
+test('Copy is disabled for unmarked text without a selection',()=>{
+ expect(copyItem({})).toEqual(['Copy','clipboard',{text:undefined},true]);
 });

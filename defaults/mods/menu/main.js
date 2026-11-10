@@ -3,7 +3,7 @@
 // ↑/↓ move, Enter runs, Esc closes. An item is [label, command, args];
 // a command "worktree" opens the worktree dialog instead.
 
-import { commandAt } from "./command.js";
+import { commandAt, copyItem } from "./command.js";
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex } from "gpui-base";
 import { run, props, closeOverlay, openOverlay, theme, keys, terminals, spaces, panes, exec } from "herdr";
@@ -38,7 +38,7 @@ function items(p, git) {
       const inTab = panes().some((pane) => pane.pane === tg.pane);
       const region = commandAt(tg.snapshot);
       return [
-        ["Copy", "clipboard", { text: tg.snapshot?.selection }, tg.snapshot?.selection == null],
+        copyItem(tg.snapshot, region),
         ["Copy Output", "clipboard", { text: region?.output }, !region],
         ["Copy Command", "clipboard", { text: region?.command }, !region],
         ...(inTab

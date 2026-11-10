@@ -1065,7 +1065,8 @@ including a small herdr-core skill you can install with the user's permission.
   rewrites them). Don't touch other mods unless the request
   needs it.
 
-Terminal right-click menus offer Copy (the selection captured at opening),
+Terminal right-click menus offer Copy (the marked command and its output),
+which becomes Copy Selected when text was selected at opening, plus
 Copy Output and Copy Command. Command actions require OSC 133 shell markers;
 source the packaged `share/herdr-app/shell/herdr.zsh` in interactive Herdr zsh
 sessions, including explicitly configured remote shells. Existing unmarked

@@ -50,3 +50,10 @@ export function commandAt(snapshot) {
   const command = text(start, output, true).replace(/\n$/, '');
   return { command, output: text(output, limit, false) };
 }
+
+// A captured selection takes precedence, including in unmarked or alternate-screen text.
+export function copyItem(snapshot, region = commandAt(snapshot)) {
+  if (snapshot?.selection != null)
+    return ["Copy Selected", "clipboard", { text: snapshot.selection }, false];
+  return ["Copy", "clipboard", { text: region ? `${region.command}\n${region.output}` : undefined }, !region];
+}

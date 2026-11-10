@@ -1046,4 +1046,8 @@ fn terminal_menu_copies_captured_selection_command_and_output(cx: &mut TestAppCo
         describe(cx, &staged, "mods/menu", true, p.clone(), updates("current", "current"), Some(&format!("this.choose({i}, cx);"))).unwrap();
         assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(), Some(*expected));
     }
+    p["target"]["snapshot"]["selection"] = Value::Null;
+    let tree = describe(cx, &staged, "mods/menu", true, p, updates("current", "current"), Some("this.choose(0, cx);")).unwrap();
+    assert!(!tree.contains("Copy Selected"), "no selection: {tree}");
+    assert_eq!(cx.read_from_clipboard().and_then(|item| item.text()).as_deref(), Some("true\n  界\n"));
 }

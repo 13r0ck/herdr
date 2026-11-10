@@ -75,7 +75,8 @@ the same tab. Give `direction` or `target`, not both. Focus stays with the same 
 herdr-app do pane.swap '{"pane":"p12","target":"p14"}'
 ```
 
-Terminal right-click offers Copy, Copy Output and Copy Command. Command copying
+Terminal right-click offers Copy (command and output), Copy Output and Copy Command.
+With text selected, Copy becomes Copy Selected and copies that selection instead. Command copying
 requires OSC 133 markers; source `share/herdr-app/shell/herdr.zsh` in zsh,
 including explicitly configured remote sessions. Actions use the text captured
 when the menu opened and never change the terminal selection or scroll position.
